@@ -70,3 +70,4 @@ def chat():
     except Exception as e:
         print("Gemini error:", str(e))
         return jsonify({"error": "Gemini connection failed"}), 502
+        
