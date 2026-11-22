@@ -1,7 +1,9 @@
 
 import os
+import json
+import urllib.request
+import urllib.error
 from flask import Flask, request, jsonify
-from openai import OpenAI, OpenAIError
 
 app = Flask(__name__)
 
@@ -11,56 +13,60 @@ def home():
 
 @app.post("/chat")
 def chat():
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
+    api_key = os.getenv("GEMINI_API_KEY", "").strip()
     if not api_key:
-        return jsonify({
-            "error": "OPENAI_API_KEY is missing"
-        }), 503
+        return jsonify({"error": "GEMINI_API_KEY is missing"}), 503
 
     data = request.get_json(silent=True) or {}
     message = str(data.get("message", "")).strip()
-
     if not message:
         return jsonify({"error": "Message is empty"}), 400
 
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/"
+        "models/gemini-2.5-flash:generateContent"
+    )
+
+    payload = {
+        "systemInstruction": {
+            "parts": [{"text": (
+                "You are Сулу Кыз, a friendly voice assistant. "
+                "Reply naturally in the user's language: "
+                "Kyrgyz, Russian or English. "
+                "Keep answers concise and helpful."
+            )}]
+        },
+        "contents": [
+            {"role": "user", "parts": [{"text": message}]}
+        ],
+        "generationConfig": {"maxOutputTokens": 1024}
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": api_key
+        },
+        method="POST"
+    )
+
     try:
-        client = OpenAI(api_key=api_key, timeout=30.0)
+        with urllib.request.urlopen(req, timeout=90) as response:
+            result = json.load(response)
 
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            instructions=(
-                "You are Сулу Кыз, a friendly AI voice assistant. "
-                "Reply in the user's language: Kyrgyz, Russian "
-                "or English. Keep answers natural and concise."
-            ),
-            input=message
-        )
-
-        reply = response.output_text.strip()
+        parts = result["candidates"][0]["content"]["parts"]
+        reply = "".join(p.get("text", "") for p in parts).strip()
 
         if not reply:
-            return jsonify({
-                "error": "AI returned an empty response"
-            }), 502
+            return jsonify({"error": "Empty Gemini response"}), 502
 
         return jsonify({"reply": reply})
 
-    except OpenAIError as e:
-        app.logger.error(
-            "OpenAI request failed: %s", str(e)
-        )
-        return jsonify({
-            "error": "AI request failed",
-            "details": str(e)[:300]
-        }), 502
-
-    except Exception:
-        app.logger.exception("Unexpected server error")
-        return jsonify({
-            "error": "Internal server error"
-        }), 500
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", "10000"))
-    app.run(host="0.0.0.0", port=port)
+    except urllib.error.HTTPError as e:
+        print("Gemini HTTP error:", e.code, e.read().decode("utf-8", "replace"))
+        return jsonify({"error": "Gemini request failed", "code": e.code}), 502
+    except Exception as e:
+        print("Gemini error:", str(e))
+        return jsonify({"error": "Gemini connection failed"}), 502
